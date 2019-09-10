@@ -465,6 +465,15 @@ class MkvtoMp4:
                     self.log.debug("Not creating any additional iOS audio streams.")
                     self.iOS = False
 
+                # Added by me, use codec best suited to number of channels
+                if audio_channels > 2:
+                    if acodec != 'ac3' and 'ac3' in self.audio_codec:
+                        acodec = 'ac3'
+                else:
+                    if acodec != 'aac' and 'aac' in self.audio_codec:
+                        acodec = 'aac'
+
+
                 audio_settings.update({l: {
                     'map': a.index,
                     'codec': acodec,
