@@ -467,11 +467,21 @@ class MkvtoMp4:
 
                 # Added by me, use codec best suited to number of channels
                 if audio_channels > 2:
-                    if acodec != 'ac3' and 'ac3' in self.audio_codec:
+                    self.log.info('Surround sound detected...seeing if we can use ac3...')
+                    if 'ac3' in self.audio_codec:
+                        self.log.info('...we can')
                         acodec = 'ac3'
+                    else:
+                        self.log.info('...we can not')
                 else:
-                    if acodec != 'aac' and 'aac' in self.audio_codec:
+                    self.log.info('Stereo sound detected...seeing if we can use acc...')
+                    if 'aac' in self.audio_codec:
+                        self.log.info('...we can')
                         acodec = 'aac'
+                    else:
+                        self.log.info('...we can not')
+                if acodec != 'copy'
+                    acodec = 'copy' if a.codec.lower() == acodec else acodec
 
 
                 audio_settings.update({l: {
