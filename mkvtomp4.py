@@ -466,23 +466,37 @@ class MkvtoMp4:
                     self.iOS = False
 
                 # Added by me, use codec best suited to number of channels
+                codec_overridden = False
                 if audio_channels > 2:
                     self.log.info('Surround sound detected...seeing if we can use ac3...')
-                    if 'ac3' in self.audio_codec:
+                    if acodec == 'ac3':
+                        self.log.info('...already is')
+                    elif acodec == 'copy' and a.codec.lower() == 'ac3':
+                        self.log.info('...already copying original ac3')
+                    elif 'ac3' in self.audio_codec:
                         self.log.info('...we can')
                         acodec = 'ac3'
+                        codec_overridden = True
                     else:
                         self.log.info('...we can not')
                 else:
-                    self.log.info('Stereo sound detected...seeing if we can use acc...')
-                    if 'aac' in self.audio_codec:
+                    self.log.info('Stereo sound detected...seeing if we can use aac...')
+                    if acodec == 'aac':
+                        self.log.info('...already is')
+                    elif acodec == 'copy' and a.codec.lower() == 'aac':
+                        self.log.info('...already copying original aac')
+                    elif 'aac' in self.audio_codec:
                         self.log.info('...we can')
                         acodec = 'aac'
+                        codec_overridden = True
                     else:
-                        self.log.info('...we can not')
-                if acodec != 'copy'
-                    acodec = 'copy' if a.codec.lower() == acodec else acodec
-
+                        self.log.info('...we can not, aac was not in {}'.format(self.audio_codec))
+                if codec_overridden:
+                    if acodec != 'copy' and a.audio_channels == audio_channels and a.codec.lower() == acodec:
+                        acodec = 'copy'
+                        self.log.info('Setting audio codec to copy because codec {} and channel count {} match.'.format(
+                            acodec, audio_channels
+                        ))
 
                 audio_settings.update({l: {
                     'map': a.index,
