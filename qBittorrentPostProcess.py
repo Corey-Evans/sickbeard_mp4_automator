@@ -32,7 +32,14 @@ if len(sys.argv) != 7:
     log.error(str(sys.argv[1:]))
     sys.exit()
 
-settings = ReadSettings(os.path.dirname(sys.argv[0]), "autoProcess.ini")
+# Chcanged by me, use custom ini based on category
+ini_file = "autoProcess-{}.ini".format(str(sys.argv[1]).lower())
+log.info(ini_file)
+settings = ReadSettings(
+    os.path.dirname(sys.argv[0]),
+    ini_file,
+)
+
 label = sys.argv[1].lower()
 root_path = str(sys.argv[3])
 content_path = str(sys.argv[4])
@@ -64,7 +71,7 @@ try:
     from qbittorrent import Client
 except ImportError:
     log.exception("Python module PYTHON-QBITTORRENT is required. Install with 'pip install python-qbittorrent' then try again.")
-    sys.exit()    
+    sys.exit()
 
 delete_dir = False
 
@@ -151,6 +158,37 @@ else:
                 log.debug("Copying %s to %s" % (inputfile, newpath))
     path = newpath
     delete_dir = newpath
+
+
+
+# Added by me, copy subs before sending to Sonarr/Radarr - because their extra import sucks (deletes some subs and doesn't keep forced tag)
+def include_patterns(*patterns):
+    def _ignore_patterns(path, all_names):
+        keep = (name for pattern in patterns
+                        for name in fnmatch.filter(all_names, pattern))
+        dir_names = (name for name in all_names if isdir(join(path, name)))
+        return set(all_names) - set(keep) - set(dir_names)
+    return _ignore_patterns
+# Import from both org location and converted location (which will include extracted strs)
+org_paths = [path]
+if os.path.isdir(root_path):
+    org_paths.append(root_path)
+for org_path in org_paths:
+    # cater for both path and root_path
+    copy_path = org_path.replace('/seeding', '/subs_to_import').replace('/completed', '/subs_to_import')
+    # if already exists, remove old
+    log.info("Checking if {} already exists.".format(copy_path))
+    if os.path.isdir(copy_path):
+        log.info("Removing {}.".format(copy_path))
+        rmtree(copy_path, ignore_errors=True)
+    else:
+        log.info("Doesn't already exist: {}.".format(copy_path))
+    copytree(org_path, copy_path, ignore=include_patterns('*.sub', '*.smi', '*.ssa', '*.ass', '*.vtt', '*.srt', '*.idx'))
+    if os.path.isdir(copy_path) and not os.listdir(copy_path):
+        # If no subs found, no point having dir
+        os.rmdir(copy_path)
+
+
 
 if label == categories[0]:
     log.info("Passing %s directory to Couch Potato." % path)
