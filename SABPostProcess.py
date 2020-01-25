@@ -65,6 +65,24 @@ if len(categories) != len(set(categories)):
     log.error("Duplicate category detected. Category names must be unique.")
     sys.exit()
 
+# added by me - flatten dirs
+for dirpath, dirnames, filenames in os.walk(path):
+    for filename in filenames:
+        org_file_path = os.path.join(dirpath, filename)
+        dest_file_path = os.path.join(path, filename)
+        if org_file_path != dest_file_path:
+            if os.path.exists(dest_file_path):
+                n = 1
+                while True:
+                    dest_file_path = os.path.join(path, "{}-{}".format(n, filename))
+                    if not os.path.exists(dest_file_path):
+                        break
+                    n += 1
+            os.rename(org_file_path, dest_file_path)
+            # rm empty dirs
+            if len(os.listdir(dirpath)) == 0:
+                os.rmdir(dirpath)
+
 if settings.SAB['convert']:
     log.info("Performing conversion")
     # Check for custom uTorrent output_dir

@@ -11,7 +11,7 @@ from mkvtomp4 import MkvtoMp4
 import logging
 from logging.config import fileConfig
 import fnmatch
-from os.path import isdir, join
+from os.path import isdir, join, basename, splitext
 
 try:
     logpath = '/var/log/sickbeard_mp4_automator'
@@ -29,38 +29,22 @@ try:
 
     log.info("qBittorrent post processing started.")
 
-    if len(sys.argv) != 7:
-        log.error("Not enough command line parameters present, are you launching this from qBittorrent?")
-        log.error("#Args: %L %T %R %F %N %I Category, Tracker, RootPath, ContentPath , TorrentName, InfoHash")
-        log.error("Length was %s" % str(len(sys.argv)))
-        log.error(str(sys.argv[1:]))
+    torrent_hash = sys.argv[1]
+    try:
+        label = sys.argv[2]
+    except IndexError:
+        log.info("No label - so no processing")
         sys.exit()
 
     # Chcanged by me, use custom ini based on category
-    ini_file = "autoProcess-{}.ini".format(str(sys.argv[1]).lower())
+    ini_file = "autoProcess-{}.ini".format(str(label).lower())
     log.info(ini_file)
     settings = ReadSettings(
         os.path.dirname(sys.argv[0]),
         ini_file,
     )
 
-    label = sys.argv[1].lower()
-    root_path = str(sys.argv[3])
-    content_path = str(sys.argv[4])
-    name = sys.argv[5]
-    torrent_hash = sys.argv[6]
     categories = [settings.qBittorrent['cp'], settings.qBittorrent['sb'], settings.qBittorrent['sonarr'], settings.qBittorrent['radarr'], settings.qBittorrent['sr'], settings.qBittorrent['bypass']]
-
-    log.debug("Root Path: %s." % root_path)
-    log.debug("Label: %s." % label)
-    log.debug("Categories: %s." % categories)
-    log.debug("Torrent hash: %s." % torrent_hash)
-    log.debug("Torrent name: %s." % name)
-
-    if root_path == content_path:
-        single_file = False
-    else:
-        single_file = True
 
     if label not in categories:
         log.error("No valid label detected.")
@@ -77,95 +61,70 @@ try:
         log.exception("Python module PYTHON-QBITTORRENT is required. Install with 'pip install python-qbittorrent' then try again.")
         sys.exit()
 
-    delete_dir = False
-
     qb = Client(settings.qBittorrent['host'])
     qb.login(settings.qBittorrent['username'], settings.qBittorrent['password'])
+    log.info("Pausing all torrents")
+    qb.pause_all()
 
-    if settings.qBittorrent['actionBefore']:
-        if settings.qBittorrent['actionBefore'] == 'pause':  # currently only support pausing
-            log.debug("Sending action %s to qBittorrent" % settings.qBittorrent['actionBefore'])
-            # changed by me - pause all torrents, so we don't end up multiple conversion killing the CPU
-            #qb.pause(torrent_hash)
-            qb.pause_all()
+    torrent_name = qb._get('query/torrents', params={'hashes': torrent_hash})[0]['name']
+    torrent_save_path = qb.get_torrent(torrent_hash)['save_path']
+    torrent_files = [f['name'] for f in qb.get_torrent_files(torrent_hash)]
+
+    if not torrent_name:
+        raise Exception("Torrent name could not be fetched")
+
+    copy_to = "/downloads/{}".format(torrent_name)
+    if os.path.exists(copy_to):
+        log.info("Removing existing copy_to of {}".format(copy_to))
+        rmtree(copy_to, ignore_errors=True)
+
+    log.info("Creating copy_to of {}".format(copy_to))
+    os.makedirs(copy_to)
+
+    for torrent_file in torrent_files:
+        source_path = "{}/{}".format(torrent_save_path, torrent_file)
+        target_path = "{}/{}".format(copy_to, basename(torrent_file))
+        if os.path.exists(target_path):
+            n = 1
+            while True:
+                target_path = "{}/{}-{}".format(copy_to, n, basename(torrent_file))
+                if not os.path.exists(target_path):
+                    break
+                n += 1
+
+        if not os.path.exists(source_path) or not os.path.isfile(source_path):
+            raise Exception('{} does not exist.'.format(source_path))
+
+        if os.path.exists(target_path):
+            if os.path.isfile(target_path):
+                log.info("Removing existing {} as to be replaced".format(target_path))
+                os.remove(target_path)
+            else:
+                raise Exception('{} is not a file.'.format(target_path))
+
+        shutil.copy(source_path, target_path)
 
     if settings.qBittorrent['convert']:
-        # Check for custom qBittorrent output_dir
-        if settings.qBittorrent['output_dir']:
-            settings.output_dir = settings.qBittorrent['output_dir']
-            log.debug("Overriding output_dir to %s." % settings.qBittorrent['output_dir'])
-
-        # Perform conversion.
         log.info("Performing conversion")
-        settings.delete = False
-        if not settings.output_dir:
-            # If the user hasn't set an output directory, go up one from the root path and create a directory there as [name]-convert
-            suffix = "convert"
-            settings.output_dir = os.path.abspath(os.path.join(root_path, '..', ("%s-%s" % (name, suffix))))
-            if not os.path.exists(settings.output_dir):
-                os.mkdir(settings.output_dir)
+        # Use None to mean it converts to current (already copied) location
+        settings.output_dir = None
 
         converter = MkvtoMp4(settings)
-
-        if single_file:
-            # single file
-            inputfile = content_path
-            if MkvtoMp4(settings).validSource(inputfile):
-                log.info("Processing file %s." % inputfile)
-                try:
-                    output = converter.process(inputfile, reportProgress=True)
-                except:
-                    log.exception("Error converting file %s." % inputfile)
-            else:
-                log.debug("Ignoring file %s." % inputfile)
-        else:
-            log.debug("Processing multiple files.")
-            ignore = []
-            for r, d, f in os.walk(root_path):
-                for files in f:
-                    inputfile = os.path.join(r, files)
-                    if MkvtoMp4(settings).validSource(inputfile) and inputfile not in ignore:
-                        log.info("Processing file %s." % inputfile)
-                        try:
-                            output = converter.process(inputfile)
-                            if output is not False:
-                                ignore.append(output['output'])
-                            else:
-                                log.error("Converting file failed %s." % inputfile)
-                        except:
-                            log.exception("Error converting file %s." % inputfile)
-                    else:
-                        log.debug("Ignoring file %s." % inputfile)
-
-        path = converter.output_dir
+        for r, d, f in os.walk(copy_to):
+            for files in f:
+                inputfile = os.path.join(r, files)
+                if MkvtoMp4(settings).validSource(inputfile):
+                    log.info("Processing file %s." % inputfile)
+                    try:
+                        output = converter.process(inputfile)
+                    except:
+                        log.exception("Error converting file %s." % inputfile)
+                else:
+                    log.debug("Ignoring file %s." % inputfile)
+        if converter.output_dir:
+            path = converter.output_dir
     else:
-        suffix = "copy"
-        # name = name[:260-len(suffix)]
-        if single_file:
-            log.info("Single File Torrent")
-            newpath = os.path.join(path, ("%s-%s" % (name, suffix)))
-        else:
-            log.info("Multi File Torrent")
-            newpath = os.path.abspath(os.path.join(root_path, '..', ("%s-%s" % (name, suffix))))
-
-        if not os.path.exists(newpath):
-            os.mkdir(newpath)
-            log.debug("Creating temporary directory %s" % newpath)
-
-        if single_file:
-            inputfile = content_path
-            shutil.copy(inputfile, newpath)
-            log.debug("Copying %s to %s" % (inputfile, newpath))
-        else:
-            for r, d, f in os.walk(root_path):
-                for files in f:
-                    inputfile = os.path.join(r, files)
-                    shutil.copy(inputfile, newpath)
-                    log.debug("Copying %s to %s" % (inputfile, newpath))
-        path = newpath
-        delete_dir = newpath
-
-
+        log.info("Passing without conversion.")
 
     # Added by me, copy subs before sending to Sonarr/Radarr - because their extra import sucks (deletes some subs and doesn't keep forced tag)
     def include_patterns(*patterns):
@@ -175,78 +134,44 @@ try:
             dir_names = (name for name in all_names if isdir(join(path, name)))
             return set(all_names) - set(keep) - set(dir_names)
         return _ignore_patterns
-    # Import from both org location and converted location (which will include extracted strs)
-    org_paths = [path]
-    if os.path.isdir(root_path):
-        org_paths.append(root_path)
-    for org_path in org_paths:
-        # cater for both path and root_path
-        copy_path = org_path.replace('/seeding', '/subs_to_import').replace('/completed', '/subs_to_import')
-        # if already exists, remove old
-        log.info("Checking if {} already exists.".format(copy_path))
-        if os.path.isdir(copy_path):
-            log.info("Removing {}.".format(copy_path))
-            rmtree(copy_path, ignore_errors=True)
-        else:
-            log.info("Doesn't already exist: {}.".format(copy_path))
-        copytree(org_path, copy_path, ignore=include_patterns('*.sub', '*.smi', '*.ssa', '*.ass', '*.vtt', '*.srt', '*.idx'))
-        if os.path.isdir(copy_path) and not os.listdir(copy_path):
-            # If no subs found, no point having dir
-            os.rmdir(copy_path)
 
-
+    sub_copy_path = copy_to.replace('/downloads', '/subs_to_import')
+    # if already exists, remove old
+    log.info("Checking if {} already exists.".format(sub_copy_path))
+    if os.path.isdir(sub_copy_path):
+        log.info("Removing {}.".format(sub_copy_path))
+        rmtree(sub_copy_path, ignore_errors=True)
+    else:
+        log.info("Doesn't already exist: {}.".format(sub_copy_path))
+    copytree(copy_to, sub_copy_path, ignore=include_patterns('*.sub', '*.smi', '*.ssa', '*.ass', '*.vtt', '*.srt', '*.idx'))
+    if os.path.isdir(sub_copy_path) and not os.listdir(sub_copy_path):
+        # If no subs found, no point having dir
+        os.rmdir(sub_copy_path)
 
     if label == categories[0]:
-        log.info("Passing %s directory to Couch Potato." % path)
-        autoProcessMovie.process(path, settings)
+        log.info("Passing %s directory to Couch Potato." % copy_to)
+        autoProcessMovie.process(copy_to, settings)
     elif label == categories[1]:
-        log.info("Passing %s directory to Sickbeard." % path)
-        autoProcessTV.processEpisode(path, settings)
+        log.info("Passing %s directory to Sickbeard." % copy_to)
+        autoProcessTV.processEpisode(copy_to, settings)
     elif label == categories[2]:
-        log.info("Passing %s directory to Sonarr." % path)
-        sonarr.processEpisode(path, settings)
+        log.info("Passing %s directory to Sonarr." % copy_to)
+        sonarr.processEpisode(copy_to, settings)
     elif label == categories[3]:
-        log.info("Passing %s directory to Radarr." % path)
-        radarr.processMovie(path, settings)
+        log.info("Passing %s directory to Radarr." % copy_to)
+        radarr.processMovie(copy_to, settings)
     elif label == categories[4]:
-        log.info("Passing %s directory to Sickrage." % path)
-        autoProcessTVSR.processEpisode(path, settings)
+        log.info("Passing %s directory to Sickrage." % copy_to)
+        autoProcessTVSR.processEpisode(copy_to, settings)
     elif label == categories[5]:
         log.info("Bypassing any further processing as per category.")
 
-    # Run a qbittorrent action after conversion.
-    if settings.qBittorrent['actionAfter']:
-        # currently only support resuming or deleting torrent
-        if settings.qBittorrent['actionAfter'] == 'resume':
-            log.debug("Sending action %s to qBittorrent" % settings.qBittorrent['actionAfter'])
-            qb.resume(torrent_hash)
-        elif settings.qBittorrent['actionAfter'] == 'delete':
-            # this will delete the torrent from qBittorrent but it WILL NOT delete the data
-            log.debug("Sending action %s to qBittorrent" % settings.qBittorrent['actionAfter'])
-            qb.delete(torrent_hash)
-
-    if delete_dir:
-        if os.path.exists(delete_dir):
-            try:
-                os.rmdir(delete_dir)
-                log.debug("Successfully removed tempoary directory %s." % delete_dir)
-            except:
-                log.exception("Unable to delete temporary directory")
-
-    # added by me - since we now pause all, make sure all are resumed after
-    if settings.qBittorrent['actionBefore']:
-        if settings.qBittorrent['actionBefore'] == 'pause':
-            log.debug("Resuming all torrents")
-            qb.resume_all()
-
-    sys.exit()
+    log.info("Resuming all torrents")
+    qb.resume_all()
 
 # added by me - ensure if it fails - torrents keep seeding
 except Exception as e:
-    log.error("Error processing:".format(e))
-    if settings.qBittorrent['actionBefore']:
-        if settings.qBittorrent['actionBefore'] == 'pause':
-            log.debug("Resuming all torrents")
-            qb.resume_all()
+    log.error("Error processing: {}".format(e))
+    log.info("Resuming all torrents")
+    qb.resume_all()
     raise e
-    
